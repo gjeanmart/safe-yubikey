@@ -54,6 +54,17 @@ This app uses an **unofficial Safe singleton** that includes native P256 signatu
 
 ## YubiKey Details
 
+### Why PIV (Not FIDO2)?
+
+The YubiKey 5 series has multiple applets. We use **PIV** because:
+
+- **ECC P-256 support**: PIV supports secp256r1, which is exactly what EIP-7212 requires
+- **Raw signature access**: PIV returns bare ECDSA (r, s) values - perfect for on-chain verification
+- **Standard interface**: Works via PC/SC (smart card protocol), scriptable from any language
+- **No protocol overhead**: Unlike FIDO2/WebAuthn, no origin checks or authenticator data wrapping
+
+For a deeper comparison, see [Why PIV Over FIDO2/Passkeys?](#why-piv-over-fido2passkeys) below.
+
 ### Where the Key Lives
 
 The P256 key pair is stored in the YubiKey's **PIV (Personal Identity Verification) applet**:
@@ -183,72 +194,131 @@ Signature Format (v=2):
 
 > **⚠️ Warning**: The Safe singleton used here is **unofficial** and deployed from unaudited code. Do not use on mainnet without proper security review.
 
-## Why Native P256, Not Passkeys?
+## Why PIV Over FIDO2/Passkeys?
 
-This app uses **native P256 signature support** in the Safe contract rather than the Safe Passkey Module. Here's why:
+This app uses the YubiKey's **PIV applet** with native P256 signatures rather than FIDO2/WebAuthn (passkeys). Here's why PIV is the right choice for blockchain signing:
+
+### Why PIV is Ideal for EIP-7212
+
+The YubiKey 5 NFC's **PIV (Personal Identity Verification) applet** supports ECC P-256 keys (secp256r1), which is exactly what EIP-7212 targets. PIV provides:
+
+| Feature                    | PIV Approach                                   | FIDO2/WebAuthn                              |
+| -------------------------- | ---------------------------------------------- | ------------------------------------------- |
+| **Signature format**       | Raw ECDSA (r, s) - exactly what EIP-7212 needs | Wrapped in authenticator data + client JSON |
+| **Message control**        | Sign any 32-byte hash directly                 | Origin checks, challenge wrapping enforced  |
+| **Interface**              | Generic smart-card (PKCS#11, APDU)             | Browser WebAuthn API only                   |
+| **Protocol complexity**    | Minimal - just sign and return                 | Attestation, extensions, assertions         |
+| **Blockchain suitability** | Perfect - raw signatures for on-chain use      | Designed for web login flows                |
+
+### Why NOT FIDO2/WebAuthn for Blockchain Signing
+
+FIDO2/WebAuthn on YubiKey also uses P-256, but the protocol is optimized for **web authentication**, not blockchain signing:
+
+1. **Signature Wrapping**: WebAuthn signatures include:
+   - Authenticator data (37+ bytes)
+   - Client data JSON (origin, challenge, type)
+   - Extension data
+   
+   All this must be parsed on-chain, adding gas cost and complexity.
+
+2. **Origin Enforcement**: WebAuthn enforces origin checks (`https://example.com`), which makes sense for phishing protection but is unnecessary overhead for signing transaction hashes.
+
+3. **Browser Dependency**: Passkeys require a browser's WebAuthn API. PIV works via standard smart-card protocols (PC/SC) - more portable and scriptable.
+
+4. **Deterministic Control**: For blockchain, you want to sign **exactly** the transaction hash. PIV lets you pass a 32-byte hash directly; WebAuthn wraps it in additional structures.
 
 ### Native vs Module Approach
+
+Beyond the PIV vs FIDO2 choice, we also avoid the Safe Passkey Module:
 
 | Aspect             | Native P256 (our approach)      | Passkey Module                      |
 | ------------------ | ------------------------------- | ----------------------------------- |
 | **Attack surface** | Minimal - core Safe code only   | Additional module contract to audit |
-| **Dependencies**   | Just Safe + RIP-7212 precompile | Safe + Module + WebAuthn verifier   |
-| **Gas cost**       | Lower (direct precompile call)  | Higher (module overhead)            |
+| **Dependencies**   | Just Safe + EIP-7212 precompile | Safe + Module + WebAuthn verifier   |
+| **Gas cost**       | Lower (direct precompile call)  | Higher (module overhead + parsing)  |
 | **Complexity**     | Simple signature format         | WebAuthn authenticator data parsing |
 | **Upgrade risk**   | None - no module to upgrade     | Module bugs require migration       |
-
-### Why Not WebAuthn/Passkeys?
-
-While passkeys are excellent for web authentication, they introduce complexity for blockchain use:
-
-1. **WebAuthn overhead**: Passkey signatures include authenticator data, client data JSON, and flags that must be parsed on-chain. Native P256 is just `(r, s, x, y)`.
-
-2. **Browser dependency**: Passkeys require a browser's WebAuthn API. Our approach uses YubiKey's PIV applet directly via PC/SC - no browser needed.
-
-3. **Module trust**: The Safe Passkey Module is additional code that must be:
-   - Deployed and enabled on your Safe
-   - Audited for security vulnerabilities
-   - Maintained over time
-
-4. **Simpler recovery**: With native P256, your Safe is a standard Safe with a P256 owner. No module state to worry about.
 
 ### The Principle: Less Code = Less Risk
 
 ```
-Native P256 path:
-  YubiKey → Sign hash → Safe.execTransaction() → RIP-7212 precompile
-  (2 contracts: Safe + Precompile)
+PIV + Native P256 path:
+  YubiKey PIV → Raw ECDSA (r,s) → Safe.execTransaction() → EIP-7212 precompile
+  Components: Safe contract + Precompile (2 trusted components)
 
 Passkey Module path:
-  Browser → WebAuthn API → Sign with authenticator data →
+  Browser → WebAuthn API → Authenticator data + signature →
   Safe.execTransaction() → Module → WebAuthn Verifier → P256 Verifier
-  (4+ contracts: Safe + Module + Verifiers)
+  Components: Safe + Module + Verifiers (4+ trusted components)
 ```
 
-Every additional contract is a potential point of failure or vulnerability. Native integration minimizes this.
+Every additional contract or protocol layer is a potential point of failure or vulnerability.
 
 ### Trade-offs
 
-Native P256 does have some limitations:
+PIV does have some limitations compared to passkeys:
 
-- **No attestation**: WebAuthn provides device attestation; PIV doesn't
-- **Manual key management**: No cloud sync like passkeys offer
-- **Less portable**: Requires this specific app (not any WebAuthn-enabled site)
+| Limitation                | PIV                               | Passkeys                          |
+| ------------------------- | --------------------------------- | --------------------------------- |
+| **Device attestation**    | ❌ No cryptographic proof         | ✅ Verifiable device identity     |
+| **Cloud sync**            | ❌ Manual backup only             | ✅ Platform-managed sync          |
+| **Cross-platform**        | ❌ Requires this app              | ✅ Any WebAuthn-enabled site      |
+| **User experience**       | PIN entry required                | Biometric/touch options           |
 
-For a high-security Safe wallet, we believe these trade-offs favor the simpler, native approach.
+For a **high-security Safe wallet** where you control exactly what gets signed, we believe these trade-offs strongly favor the simpler, more transparent PIV approach.
 
-## Why Electron?
+## Why Electron? (Not a Web App)
 
-Browser WebUSB cannot access the YubiKey's PIV interface on macOS because:
+### The Browser Limitation
 
-- Chrome blocks CCID (smart card) devices in its security blocklist
-- macOS system daemons claim exclusive device access
+There is **no standard Web API** that lets a web app talk directly to the YubiKey's PIV applet and say "sign this 32-byte hash and give me the raw (r, s) signature back."
 
-Electron solves this by using **PC/SC** (native smart card API) via the `pcsclite` library:
+| What Browsers CAN Do                         | What Browsers CANNOT Do                     |
+| -------------------------------------------- | ------------------------------------------- |
+| Use PIV for TLS client certificate auth      | Access raw ECDSA signatures from PIV        |
+| Trigger OS-level smart card dialogs          | Send custom APDU commands to YubiKey        |
+| Use WebAuthn/FIDO2 (but with wrapped sigs)   | Control exactly which bytes get signed      |
 
-- Works with macOS/Linux/Windows smart card services
-- Provides full access to PIV operations
-- Is the standard way to interact with smart cards
+**Why this matters for EIP-7212:**
+
+- We need the **raw (r, s)** signature values to format for on-chain verification
+- WebAuthn hides these details behind authenticator data wrapping
+- PIV gives us exactly what we need, but browsers can't access it directly
+
+### What About WebUSB?
+
+You might think WebUSB could help, but:
+
+1. **Chrome blocks CCID devices**: Smart card (CCID) devices are in Chrome's security blocklist
+2. **macOS claims exclusive access**: System daemons (like `com.apple.ifdreader`) claim the device
+3. **No PIV protocol in browser**: Even with access, you'd need to implement PIV APDU protocol in JS
+
+### The Solution: Native Helper
+
+The standard workaround for PIV access from applications is a **native helper** that:
+- Talks to PIV via PKCS#11 or PC/SC (standard smart card APIs)
+- Exposes a simple `sign(hash) → signature` interface
+- Runs locally and communicates with your app
+
+**Electron is this native helper** - it bundles:
+- A React UI (familiar web development)
+- Node.js main process with PC/SC access
+- IPC bridge between renderer and native code
+
+### Why PC/SC?
+
+PC/SC (Personal Computer/Smart Card) is the **standard API** for smart card communication:
+
+| Platform | PC/SC Implementation              | Service                  |
+| -------- | --------------------------------- | ------------------------ |
+| macOS    | CryptoTokenKit / pcscd            | Built-in                 |
+| Linux    | pcsclite                          | `pcscd` daemon           |
+| Windows  | WinSCard                          | Smart Card Service       |
+
+Our app uses the `pcsclite` Node.js library to access this API, providing:
+- Full access to PIV APDU commands
+- Works on all major platforms
+- Is how professional smart card applications work
 
 ## Architecture
 
