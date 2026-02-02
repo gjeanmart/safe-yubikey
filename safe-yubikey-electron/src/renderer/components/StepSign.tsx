@@ -2,6 +2,7 @@
  * Step 5: Sign Transaction
  *
  * Signs the Safe transaction hash using the YubiKey's P256 key.
+ * If PIN verification has expired, prompts user to re-enter PIN.
  */
 
 import React, { useState } from 'react';
@@ -22,6 +23,15 @@ export function StepSign({ safeTxHash, publicKey, ownerAddress, onSigned, onBack
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
+  // PIN re-entry state
+  const [showPinDialog, setShowPinDialog] = useState(false);
+  const [pin, setPin] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [pinLoading, setPinLoading] = useState(false);
+
+  /**
+   * Attempt to sign. If PIN expired, show PIN dialog instead of error.
+   */
   const handleSign = async () => {
     setLoading(true);
     setError(null);
@@ -32,6 +42,14 @@ export function StepSign({ safeTxHash, publicKey, ownerAddress, onSigned, onBack
       const result = await window.yubiKey.signHash(safeTxHash);
 
       if (!result.success) {
+        // Check if this is a PIN verification error
+        if (result.error.includes('PIN verification required') || result.error.includes('6982')) {
+          // Show PIN dialog instead of error
+          setShowPinDialog(true);
+          setStatus(null);
+          setLoading(false);
+          return;
+        }
         throw new Error(result.error);
       }
 
@@ -47,6 +65,49 @@ export function StepSign({ safeTxHash, publicKey, ownerAddress, onSigned, onBack
     } finally {
       setLoading(false);
     }
+  };
+
+  /**
+   * Handle PIN re-entry and retry signing.
+   */
+  const handlePinSubmit = async () => {
+    if (!pin || pin.length < 6) {
+      setPinError('PIN must be at least 6 characters');
+      return;
+    }
+
+    setPinLoading(true);
+    setPinError(null);
+
+    try {
+      // Verify PIN
+      const pinResult = await window.yubiKey.verifyPin(pin);
+      if (!pinResult.success) {
+        setPinError(pinResult.error);
+        return;
+      }
+
+      // Close dialog and retry signing
+      setShowPinDialog(false);
+      setPin('');
+
+      // Now retry the signing operation
+      handleSign();
+    } catch (e) {
+      setPinError(e instanceof Error ? e.message : 'PIN verification failed');
+    } finally {
+      setPinLoading(false);
+    }
+  };
+
+  /**
+   * Cancel PIN dialog
+   */
+  const handlePinCancel = () => {
+    setShowPinDialog(false);
+    setPin('');
+    setPinError(null);
+    setError('PIN verification required to sign. Please try again.');
   };
 
   return (
@@ -91,11 +152,59 @@ export function StepSign({ safeTxHash, publicKey, ownerAddress, onSigned, onBack
         </div>
       )}
 
+      {/* PIN Re-entry Dialog */}
+      {showPinDialog && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-4">
+          <div>
+            <h3 className="font-medium text-yellow-800">PIN Required</h3>
+            <p className="mt-1 text-sm text-yellow-700">
+              Your PIN session has expired. Please re-enter your PIV PIN to continue signing.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700">PIV PIN</label>
+            <input
+              type="password"
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Enter PIN"
+              autoFocus
+            />
+          </div>
+
+          {pinError && <div className="text-red-600 text-sm">{pinError}</div>}
+
+          <div className="flex gap-3">
+            <button
+              onClick={handlePinCancel}
+              className="btn btn-secondary flex-1"
+              disabled={pinLoading}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handlePinSubmit}
+              className="btn btn-primary flex-1"
+              disabled={pinLoading || !pin}
+            >
+              {pinLoading ? 'Verifying...' : 'Verify & Sign'}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex gap-4">
         <button onClick={onBack} className="btn btn-secondary flex-1">
           Back
         </button>
-        <button onClick={handleSign} disabled={loading} className="btn btn-primary flex-1">
+        <button
+          onClick={handleSign}
+          disabled={loading || showPinDialog}
+          className="btn btn-primary flex-1"
+        >
           {loading ? 'Signing...' : 'Sign with YubiKey'}
         </button>
       </div>

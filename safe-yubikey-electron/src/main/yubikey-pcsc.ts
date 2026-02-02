@@ -1142,7 +1142,19 @@ export class YubiKeyPCSC {
     const data = response.data;
     const sw = data.slice(-2);
     if (sw[0] !== 0x90 || sw[1] !== 0x00) {
-      return { success: false, error: `Signing failed: SW=${sw.toString('hex')}` };
+      // Provide user-friendly error messages for common status codes
+      const swHex = sw.toString('hex');
+      let errorMessage = `Signing failed: SW=${swHex}`;
+
+      if (swHex === '6982') {
+        errorMessage = 'PIN verification required. Please go back to Step 2 and re-enter your PIN.';
+      } else if (swHex === '6983') {
+        errorMessage = 'PIN is blocked. Use PUK to unblock or reset the PIV applet.';
+      } else if (swHex === '6a82') {
+        errorMessage = 'No key found in slot 9A. Please generate a key first.';
+      }
+
+      return { success: false, error: errorMessage };
     }
 
     // Parse response to extract DER signature

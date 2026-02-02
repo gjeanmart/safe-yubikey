@@ -563,7 +563,10 @@ ykman piv keys delete 9a
 ykman piv certificates delete 9a
 ```
 
-After this, the app will prompt you to generate a new key.
+**Important**: After using `ykman`, you must **reconnect in the app**:
+1. The `ykman` CLI takes control of the card reader, breaking the app's connection
+2. Go back to **Step 1** and click "Connect YubiKey" again (or restart the app)
+3. Then proceed to Step 2 - the app will detect "No key in slot 9A" and offer to generate a new one
 
 ### Option 2: Reset the Entire PIV Applet
 
@@ -593,6 +596,8 @@ After reset, defaults are restored:
 - PUK: `12345678`
 - Management Key: default 3DES key
 
+**Remember**: After using `ykman`, reconnect in the app (Step 1) before proceeding.
+
 ### Checking Current State
 
 ```bash
@@ -620,6 +625,23 @@ ykman piv certificates export 9a - | openssl x509 -text -noout
 
 - Ensure `ykman` CLI is installed: `brew install ykman`
 - The app uses `ykman` to store the certificate
+
+### "Not connected" after using ykman
+
+If you see "Not connected" or "Card Reader not connected" after using `ykman` CLI:
+
+- The `ykman` CLI takes exclusive control of the card reader
+- **Solution**: Go back to Step 1 and click "Connect YubiKey" to reconnect
+- Alternatively, restart the app
+
+### "Signing failed: SW=6982" or "PIN verification required"
+
+This means your PIN session has expired. This can happen after:
+- Generating a new key
+- Reconnecting the YubiKey
+- Too much time passing since PIN verification
+
+**Solution**: Go back to Step 2 and re-enter your PIN, then try signing again.
 
 ### "Transaction failed: GS027/GS028"
 
